@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: esports_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - esports_network
+
+  importer:
+    build: ./importer
+    container_name: importer
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: esports_db
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: postgres
+      S3_BUCKET_NAME: vcthackathon-data
+      S3_BUCKET_PREFIX: vct-international/  # Root prefix of your data
+    networks:
+      - esports_network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+    networks:
+      - esports_network
+
+networks:
+  esports_network:
+
+volumes:
+  postgres_data:
+
