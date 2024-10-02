@@ -2,28 +2,27 @@ import os
 import time
 import gzip
 import json
-import pymysql
-import boto3
+import mysql.connector
 from io import BytesIO
+from datetime import datetime
 from botocore import UNSIGNED
 from botocore.client import Config
+import boto3
 
 def connect_db(retries=5, delay=5):
     for attempt in range(retries):
         try:
-            conn = pymysql.connect(
+            conn = mysql.connector.connect(
                 host=os.environ['DATABASE_HOST'],
                 port=int(os.environ['DATABASE_PORT']),
+                database=os.environ['DATABASE_NAME'],
                 user=os.environ['DATABASE_USER'],
                 password=os.environ['DATABASE_PASSWORD'],
-                database=os.environ['DATABASE_NAME'],
-                charset='utf8mb4',
-                cursorclass=pymysql.cursors.DictCursor,
-                autocommit=False
+                auth_plugin='mysql_native_password'
             )
             print("Connected to MySQL")
             return conn
-        except pymysql.MySQLError as e:
+        except mysql.connector.Error as e:
             print(f"Connection failed: {e}")
             if attempt < retries - 1:
                 print(f"Retrying in {delay} seconds...")
@@ -54,8 +53,7 @@ def create_tables(cursor):
             dark_logo_url TEXT,
             light_logo_url TEXT,
             slug VARCHAR(100),
-            name VARCHAR(100),
-            FOREIGN KEY (home_league_id) REFERENCES leagues(league_id)
+            name VARCHAR(100)
         );
     """)
 
@@ -70,8 +68,7 @@ def create_tables(cursor):
             photo_url TEXT,
             home_team_id VARCHAR(50),
             created_at DATETIME,
-            updated_at DATETIME,
-            FOREIGN KEY (home_team_id) REFERENCES teams(id)
+            updated_at DATETIME
         );
     """)
 
@@ -98,8 +95,25 @@ def create_tables(cursor):
         );
     """)
 
+def parse_datetime(dt_str):
+    """
+    Converts ISO 8601 datetime string to MySQL DATETIME format.
+    Example: '2021-05-13T22:37:14Z' -> '2021-05-13 22:37:14'
+    """
+    try:
+        dt = datetime.strptime(dt_str, '%Y-%m-%dT%H:%M:%SZ')
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
+    except ValueError as ve:
+        print(f"ValueError: {ve} for datetime string: {dt_str}")
+        return None
+    except TypeError as te:
+        print(f"TypeError: {te} for datetime string: {dt_str}")
+        return None
+
 def import_data(cursor, table_name, json_data):
     if table_name == 'players':
+        created_at = parse_datetime(json_data.get('created_at'))
+        updated_at = parse_datetime(json_data.get('updated_at'))
         cursor.execute(
             """
             INSERT INTO players (id, handle, first_name, last_name, status, photo_url, home_team_id, created_at, updated_at)
@@ -122,8 +136,8 @@ def import_data(cursor, table_name, json_data):
                 json_data.get('status'),
                 json_data.get('photo_url'),
                 json_data.get('home_team_id'),
-                json_data.get('created_at'),
-                json_data.get('updated_at')
+                created_at,
+                updated_at
             )
         )
     elif table_name == 'teams':
@@ -219,7 +233,11 @@ def process_file(s3_client, bucket_name, key, cursor):
     compressed_body = response['Body'].read()
     with gzip.GzipFile(fileobj=BytesIO(compressed_body)) as gz:
         content = gz.read().decode('utf-8')
-        json_data = json.loads(content)
+        try:
+            json_data = json.loads(content)
+        except json.JSONDecodeError as jde:
+            print(f"JSONDecodeError for {key}: {jde}")
+            return
 
         if key.endswith('players.json.gz'):
             if isinstance(json_data, list):
