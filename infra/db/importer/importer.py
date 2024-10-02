@@ -106,6 +106,16 @@ def create_tables(cursor):
         );
     """)
 
+    # Create games table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS games (
+            platformGameId VARCHAR(100) PRIMARY KEY,
+            year INT,
+            metadata JSON,
+            snapshot JSON
+        );
+    """)
+
 def parse_datetime(dt_str):
     """
     Converts ISO 8601 datetime string to MySQL DATETIME format.
@@ -123,7 +133,7 @@ def parse_datetime(dt_str):
         print(f"TypeError: {te} for datetime string: {dt_str}")
         return None
 
-def import_data(cursor, table_name, json_data):
+def import_data(cursor, table_name, json_data, year=None):
     if table_name == 'players':
         created_at = parse_datetime(json_data.get('created_at'))
         updated_at = parse_datetime(json_data.get('updated_at'))
@@ -256,6 +266,23 @@ def import_data(cursor, table_name, json_data):
                 json_data.get('name')
             )
         )
+    elif table_name == 'games':
+        cursor.execute(
+            """
+            INSERT INTO games (platformGameId, year, metadata, snapshot)
+            VALUES (%s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                year = VALUES(year),
+                metadata = VALUES(metadata),
+                snapshot = VALUES(snapshot);
+            """,
+            (
+                json_data.get('platformGameId'),
+                year,
+                json.dumps(json_data.get('metadata')),
+                json.dumps(json_data.get('snapshot'))
+            )
+        )
     else:
         print(f"Unrecognized table: {table_name}")
 
@@ -336,6 +363,29 @@ def process_file(s3_client, bucket_name, key, cursor):
                             import_data(cursor, 'tournaments', tournament)
                 else:
                     print("Unexpected data format in tournaments.json.gz")
+            elif 'games/' in key and key.endswith('.json.gz'):
+                # Extract year and game_id from the key
+                try:
+                    parts = key.split('/')
+                    if len(parts) < 4:
+                        print(f"Invalid game file path: {key}")
+                        return
+                    year = int(parts[2])
+                    game_filename = parts[3]
+                    platformGameId = json_data.get('platformGameId')
+                    if not platformGameId:
+                        print(f"Missing platformGameId in {key}")
+                        return
+
+                    if isinstance(json_data, list):
+                        for game in json_data:
+                            import_data(cursor, 'games', game, year=year)
+                    elif isinstance(json_data, dict):
+                        import_data(cursor, 'games', json_data, year=year)
+                    else:
+                        print(f"Unexpected data format in {key}")
+                except (IndexError, ValueError) as e:
+                    print(f"Error extracting year and game_id from {key}: {e}")
             else:
                 print(f"Unrecognized file: {key}")
     except Exception as e:
