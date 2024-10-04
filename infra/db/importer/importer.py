@@ -106,13 +106,17 @@ def create_tables(cursor):
         );
     """)
 
-    # Create games table
+    # Create games table with composite unique key
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS games (
-            platformGameId VARCHAR(100) PRIMARY KEY,
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            platformGameId VARCHAR(100),
+            includedPauses VARCHAR(20),
             year INT,
             metadata JSON,
-            snapshot JSON
+            snapshot JSON,
+            INDEX idx_platformGameId (platformGameId),
+            UNIQUE KEY uniq_platformGameId_includedPauses (platformGameId, includedPauses)
         );
     """)
 
@@ -124,7 +128,11 @@ def parse_datetime(dt_str):
     if not dt_str:
         return None
     try:
-        dt = datetime.strptime(dt_str, '%Y-%m-%dT%H:%M:%SZ')
+        # Handle fractional seconds if present
+        if '.' in dt_str:
+            dt = datetime.strptime(dt_str, '%Y-%m-%dT%H:%M:%S.%fZ')
+        else:
+            dt = datetime.strptime(dt_str, '%Y-%m-%dT%H:%M:%SZ')
         return dt.strftime('%Y-%m-%d %H:%M:%S')
     except ValueError as ve:
         print(f"ValueError: {ve} for datetime string: {dt_str}")
@@ -267,10 +275,12 @@ def import_data(cursor, table_name, json_data, year=None):
             )
         )
     elif table_name == 'games':
+        included_pauses = json_data.get('metadata', {}).get('eventTime', {}).get('includedPauses')
+        print("including pauses:", included_pauses)
         cursor.execute(
             """
-            INSERT INTO games (platformGameId, year, metadata, snapshot)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO games (platformGameId, includedPauses, year, metadata, snapshot)
+            VALUES (%s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 year = VALUES(year),
                 metadata = VALUES(metadata),
@@ -278,6 +288,7 @@ def import_data(cursor, table_name, json_data, year=None):
             """,
             (
                 json_data.get('platformGameId'),
+                included_pauses,
                 year,
                 json.dumps(json_data.get('metadata')),
                 json.dumps(json_data.get('snapshot'))
@@ -372,11 +383,6 @@ def process_file(s3_client, bucket_name, key, cursor):
                         return
                     year = int(parts[2])
                     game_filename = parts[3]
-                    platformGameId = json_data.get('platformGameId')
-                    if not platformGameId:
-                        print(f"Missing platformGameId in {key}")
-                        return
-
                     if isinstance(json_data, list):
                         for game in json_data:
                             import_data(cursor, 'games', game, year=year)
