@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  importer:
+    build: ./importer
+    container_name: importer
+    environment:
+      DATABASE_HOST: vct.amooong.us
+      DATABASE_PORT: 3306
+      DATABASE_NAME: esports_db
+      DATABASE_USER: esports_user
+      DATABASE_PASSWORD: esports_password
+      S3_BUCKET_NAME: vcthackathon-data
+      S3_BUCKET_PREFIX: vct-international/
+
