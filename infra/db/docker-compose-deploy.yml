@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: esports_db
+      MYSQL_USER: esports_user
+      MYSQL_PASSWORD: esports_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    network_mode: "host"
+    command: --default-authentication-plugin=mysql_native_password
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    network_mode: "host"
+    depends_on:
+      - mysql
+
+volumes:
+  mysql_data:
+

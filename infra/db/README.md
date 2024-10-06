@@ -1,10 +1,17 @@
 ## db infra
 
-This infrastructure aims to convert the compressed json files into a queryable database.
+This infrastructure aims to convert the compressed json files into a queryable database. There are two docker compose files, one for the importer, and one for
+the deployment of grafana + db.
 
 ## Setting up
 
 Ensure docker is installed to run this.
+
+Copy the docker compose you want to run:
+
+```bash
+cp docker-compose-import.yml docker-compopse.yml
+```
 
 To run the db, and import all games, run:
 
