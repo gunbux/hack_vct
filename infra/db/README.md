@@ -10,7 +10,7 @@ Ensure docker is installed to run this.
 Copy the docker compose you want to run:
 
 ```bash
-cp docker-compose-import.yml docker-compopse.yml
+cp docker-compose-import.yml docker-compose.yml
 ```
 
 To run the db, and import all games, run:
