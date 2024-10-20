@@ -52,12 +52,29 @@ class GameDataCleaner:
             return pd.DataFrame(raw_data)
     
     @staticmethod
-    def _createRoundsDict(raw_data : pd.DataFrame):
-        # Filter rows where roundStarted or roundEnded are not NaN
-        filtered_df = raw_data[(pd.notna(raw_data['roundStarted'])) | (pd.notna(raw_data['roundEnded']))]
-
+    def _createRoundsDict(raw_data: pd.DataFrame):
+        """
+        Create a dictionary of rounds from the raw data, handling cases where 'roundEnded' may be missing.
+        If only 'roundStarted' exists, infer the end_index based on the start of the next round or the last row.
+        """
+        # Check if 'roundStarted' and 'roundEnded' columns exist in the DataFrame
+        has_round_started = 'roundStarted' in raw_data.columns
+        has_round_ended = 'roundEnded' in raw_data.columns
+    
+        # Warn if columns are missing
+        if not has_round_started:
+            print("Warning: 'roundStarted' column is missing from the data.")
+            return {}
+    
+        # Filter rows based on the available columns
+        if has_round_ended:
+            filtered_df = raw_data[(pd.notna(raw_data['roundStarted'])) | (pd.notna(raw_data['roundEnded']))]
+        else:
+            # If 'roundEnded' doesn't exist, filter only by 'roundStarted'
+            filtered_df = raw_data[pd.notna(raw_data['roundStarted'])]
+    
         rounds_dict = {}
-
+    
         # Loop through the filtered DataFrame
         for index, row in filtered_df.iterrows():
             # Check if the round has started
@@ -66,17 +83,31 @@ class GameDataCleaner:
                 if round_number:
                     rounds_dict[round_number] = {'start_index': index, 'end_index': None}
     
-            # Check if the round has ended
-            if pd.notna(row['roundEnded']):
+            # Check if the round has ended (only if 'roundEnded' exists)
+            if has_round_ended and pd.notna(row['roundEnded']):
                 round_number = row['roundEnded'].get('roundNumber')
                 if round_number in rounds_dict:
                     rounds_dict[round_number]['end_index'] = index
-
-        # Remove rounds that don't have both start and end indices
-        rounds_dict = {k: v for k, v in rounds_dict.items() if v['end_index'] is not None}
-
+    
+        # If 'roundEnded' doesn't exist, infer 'end_index' for each round
+        if not has_round_ended:
+            round_numbers = sorted(rounds_dict.keys())  # Get sorted round numbers
+            for i, round_number in enumerate(round_numbers):
+                # For the last round, set the end_index as the last row in the DataFrame
+                if i == len(round_numbers) - 1:
+                    rounds_dict[round_number]['end_index'] = len(raw_data) - 1
+                else:
+                    # Set the end_index for the current round as the start_index of the next round - 1
+                    next_round_start = rounds_dict[round_numbers[i + 1]]['start_index']
+                    rounds_dict[round_number]['end_index'] = next_round_start - 1
+        
+        # Remove rounds that still don't have an end_index (only if 'roundEnded' exists)
+        if has_round_ended:
+            rounds_dict = {k: v for k, v in rounds_dict.items() if v['end_index'] is not None}
+    
         # Now rounds_dict will contain the start and end index for each round
         return rounds_dict
+
     
     @staticmethod
     def _createTeamAndRoundDf(raw_data : pd.DataFrame):
@@ -167,10 +198,10 @@ class GameDataCleaner:
         return team_pf, round_df
     
     @staticmethod
-    def _createPlayerPf(rounds_dict : dict, raw_data : pd.DataFrame):
+    def _createPlayerPf(rounds_dict: dict, raw_data: pd.DataFrame):
         # Initialize a dictionary to store player stats
         player_metrics = {}
-
+    
         # Iterate over rounds_dict to extract relevant damage events and calculate metrics
         for round_number, indices in rounds_dict.items():
             start_index = indices['start_index']
@@ -178,54 +209,60 @@ class GameDataCleaner:
             
             # Filter the rows of damage events within the round using vectorized indexing
             round_damage_events = raw_data.loc[start_index:end_index, 'damageEvent'].dropna()
-
+    
             # Process each damage event and directly update player stats
             for event in round_damage_events:
-                causer_id = event['causerId']['value']
-                victim_id = event['victimId']['value']
+                # Use .get() to safely retrieve causerId, and victimId, handling cases where causerId is missing
+                causer_id = event.get('causerId', {}).get('value', None)
+                victim_id = event.get('victimId', {}).get('value', None)
                 damage_amount = event['damageAmount']
                 kill_event = event['killEvent']
                 location = event['location']
-
+    
+                # If causer_id is missing, print a warning and skip the event
+                if causer_id is None:
+                    print(f"Warning: Damage event in round {round_number} is missing causer_id. Skipping event.")
+                    continue  # Skip to the next damage event
+    
                 # Initialize or update stats for causer (the one dealing damage)
                 if causer_id not in player_metrics:
                     player_metrics[causer_id] = {
                         'kills': 0, 'deaths': 0, 'damage_dealt': 0, 'damage_taken': 0, 'total_hits': 0, 'headshots': 0
                     }
-
+    
                 # Initialize or update stats for victim (the one receiving damage)
                 if victim_id not in player_metrics:
                     player_metrics[victim_id] = {
                         'kills': 0, 'deaths': 0, 'damage_dealt': 0, 'damage_taken': 0, 'total_hits': 0, 'headshots': 0
                     }
-
+    
                 # Update causer's stats
                 player_metrics[causer_id]['damage_dealt'] += damage_amount
                 player_metrics[causer_id]['total_hits'] += 1
                 
                 if location == 'HEAD':
                     player_metrics[causer_id]['headshots'] += 1
-
+    
                 if kill_event:
                     player_metrics[causer_id]['kills'] += 1
-
+    
                 # Update victim's stats
                 player_metrics[victim_id]['damage_taken'] += damage_amount
                 if kill_event:
                     player_metrics[victim_id]['deaths'] += 1
-
+    
         # Calculate headshot percentage for each player
         for player_id, metrics in player_metrics.items():
             total_hits = metrics['total_hits']
             headshots = metrics['headshots']
             metrics['headshot_percentage'] = (headshots / total_hits * 100) if total_hits > 0 else 0
-
+    
         # Convert the player_metrics dictionary into a DataFrame for analysis
         player_pf = pd.DataFrame.from_dict(player_metrics, orient='index').reset_index()
         player_pf.rename(columns={'index': 'playerID'}, inplace=True)
-
+    
         final_row = raw_data[raw_data['snapshot'].notna()].iloc[-1]
-
+    
         # Iterate through playertest['players'] and update player_metrics_df
         for player in final_row['snapshot']['players']:
             player_id = player['playerId']['value']
@@ -234,14 +271,14 @@ class GameDataCleaner:
             if player_id in player_pf['playerID'].values:
                 # Get the index of the player to update their metrics
                 player_index = player_pf[player_pf['playerID'] == player_id].index[0]
-
+    
                 # Update Assists and TotalScore in player_metrics_df
                 player_pf.at[player_index, 'Assists'] = player['assists']
                 player_pf.at[player_index, 'TotalScore'] = player['scores']['combatScore']['totalScore']
-
+    
         filtered_df = raw_data[raw_data['configuration'].notna()]
         agent = []
-
+    
         for player in filtered_df['configuration'].iloc[-1]['players']:
             account_id = player['accountId']['value']
             player_id = player['playerId']['value']
@@ -254,14 +291,15 @@ class GameDataCleaner:
                 'displayName': display_name,
                 'selectedAgent': selected_agent
             })
-
-        # Create a DataFrame
+    
+        # Create a DataFrame for agent data
         agent_df = pd.DataFrame(agent)
-
+    
         agent_df['AgentName'] = agent_df['selectedAgent'].map(GameDataCleaner.AGENT_MAP)
-
-
+    
+        # Merge player performance with agent data
         player_pf = pd.merge(player_pf, agent_df, left_on='playerID', right_on='playerId')
-        player_pf = player_pf.drop(columns = ['selectedAgent','playerId'], axis=1)
-
+        player_pf = player_pf.drop(columns=['selectedAgent', 'playerId'], axis=1)
+    
         return player_pf
+
